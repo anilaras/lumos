@@ -45,7 +45,6 @@ Lumos comes with an installation script that handles compilation, udev rules, an
 The script will:
 * Compile the source code.
 * Install the binary to `/usr/local/bin/lumos`.
-* Create `udev` rules to allow brightness control without `sudo`.
 * Enable and start the systemd user service.
 
 ### Manual Build
@@ -81,7 +80,7 @@ To change how often Lumos checks for light (e.g., every 30 seconds):
 
 1.  Edit the service file:
     ```bash
-    nano ~/.config/systemd/user/lumos.service
+    nano /etc/systemd/system/lumos.service
     ```
 2.  Modify the `ExecStart` line:
     ```ini
@@ -89,8 +88,8 @@ To change how often Lumos checks for light (e.g., every 30 seconds):
     ```
 3.  Reload and restart:
     ```bash
-    systemctl --user daemon-reload
-    systemctl --user restart lumos
+    systemctl daemon-reload
+    systemctl restart lumos
     ```
 
 ## How It Works
@@ -106,17 +105,15 @@ To remove Lumos completely from your system:
 
 ```bash
 # Stop the service
-systemctl --user stop lumos
-systemctl --user disable lumos
+sudo systemctl stop lumos
+sudo systemctl disable lumos
 
 # Remove files
-rm ~/.config/systemd/user/lumos.service
+rm /etc/systemd/system/lumos.service
 sudo rm /usr/local/bin/lumos
-sudo rm /etc/udev/rules.d/99-lumos.rules
 
 # Reload system
-sudo udevadm control --reload-rules
-systemctl --user daemon-reload
+sudo systemctl daemon-reload
 ```
 
 ## Contributing
@@ -125,7 +122,7 @@ Pull requests are welcome\! For major changes, please open an issue first to dis
 
 ## License
 
-This project is licensed under the MIT License - see the [LICENSE](https://www.google.com/search?q=LICENSE) file for details.
+This project is licensed under the MIT License - see the LICENSE file for details.
 
 ```
 ```
