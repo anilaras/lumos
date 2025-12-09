@@ -1,0 +1,14 @@
+[Unit]
+Description=Lumos Auto-Brightness Service
+After=graphical-session.target
+
+[Service]
+# ExecStart kurulum scripti tarafından güncellenebilir veya path'e atılabilir
+ExecStart=/usr/local/bin/lumos -i 60
+Restart=on-failure
+RestartSec=5
+# Logların anlık düşmesi için
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=default.target
