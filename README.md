@@ -8,6 +8,8 @@ Unlike other solutions that rely on heavy Python libraries (like OpenCV) or GUI 
 ![Platform](https://img.shields.io/badge/platform-Linux-lightgrey.svg)
 ![Language](https://img.shields.io/badge/language-C-orange.svg)
 
+Note: Lumos is designed for laptops and integrated screens managed via ACPI/GPU drivers. It does not support external monitors (HDMI/DP) controlled via DDC/CI.
+
 ## Features
 
 * **Zero Bloat:** No Python, No OpenCV, No GStreamer. Just standard C libraries.
@@ -123,6 +125,3 @@ Pull requests are welcome\! For major changes, please open an issue first to dis
 ## License
 
 This project is licensed under the MIT License - see the LICENSE file for details.
-
-```
-```
