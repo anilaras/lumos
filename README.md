@@ -32,7 +32,7 @@ Lumos comes with an installation script that handles compilation, udev rules, an
 
 1.  **Clone the repository:**
     ```bash
-    git clone [https://github.com/yourusername/lumos.git](https://github.com/yourusername/lumos.git)
+    git clone [https://github.com/anilaras/lumos.git](https://github.com/anilaras/lumos.git)
     cd lumos
     ```
 
@@ -93,14 +93,14 @@ To change how often Lumos checks for light (e.g., every 30 seconds):
     systemctl --user restart lumos
     ```
 
-## 🧠 How It Works
+## How It Works
 
 1.  **Auto-Discovery:** On startup, Lumos scans `/sys/class/backlight` to find the active display driver.
 2.  **V4L2 Capture:** It connects to the webcam using the Video4Linux2 API. It specifically requests a low-resolution frame in **YUYV** format.
 3.  **Luma Calculation:** Since YUYV format separates brightness (Y) from color (UV), Lumos simply averages the 'Y' bytes. This avoids CPU-intensive RGB-to-Grayscale conversion.
 4.  **Hysteresis:** To prevent screen flickering, the brightness is only updated if the calculated change exceeds a 5% threshold.
 
-## 🗑️ Uninstall
+## Uninstall
 
 To remove Lumos completely from your system:
 
