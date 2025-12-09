@@ -15,8 +15,9 @@
 #include <errno.h>
 #include <dirent.h>
 #include <getopt.h>
+#include <stdarg.h> 
 
-// Varsayılan Ayarlar
+// Default Settings
 #define DEFAULT_INTERVAL 60
 #define CAMERA_DEV "/dev/video0"
 #define MIN_BRIGHTNESS_PERCENT 5
@@ -25,12 +26,13 @@
 #define WIDTH 640
 #define HEIGHT 480
 
-// Global Yapılandırma
-char backlight_path[256] = {0};
+// Global Configuration
+// DÜZELTME: Boyut 256'dan 512'ye çıkarıldı.
+char backlight_path[512] = {0};
 int interval = DEFAULT_INTERVAL;
 int verbose = 0;
 
-// Yardımcı: Loglama
+// Helper: Logging
 void log_msg(const char *format, ...) {
     if (!verbose) return;
     va_list args;
@@ -40,7 +42,7 @@ void log_msg(const char *format, ...) {
     printf("\n");
 }
 
-// 1. Sürücü Keşfi (Auto-Discovery)
+// 1. Driver Auto-Discovery
 int find_backlight_driver() {
     DIR *d;
     struct dirent *dir;
@@ -49,7 +51,7 @@ int find_backlight_driver() {
 
     while ((dir = readdir(d)) != NULL) {
         if (dir->d_name[0] == '.') continue;
-        // İlk bulduğunu al (Genelde intel_backlight veya amdgpu_bl0)
+        // Take the first available driver
         snprintf(backlight_path, sizeof(backlight_path), "/sys/class/backlight/%s", dir->d_name);
         closedir(d);
         return 1;
@@ -58,9 +60,10 @@ int find_backlight_driver() {
     return 0;
 }
 
-// Dosya Okuma/Yazma Yardımcıları
+// File I/O Helpers
 int read_int(const char *filename) {
-    char path[512];
+    // DÜZELTME: Yerel buffer boyutu artırıldı.
+    char path[1024];
     snprintf(path, sizeof(path), "%s/%s", backlight_path, filename);
     FILE *f = fopen(path, "r");
     if (!f) return -1;
@@ -71,7 +74,8 @@ int read_int(const char *filename) {
 }
 
 void write_int(const char *filename, int val) {
-    char path[512];
+    // DÜZELTME: Yerel buffer boyutu artırıldı.
+    char path[1024];
     snprintf(path, sizeof(path), "%s/%s", backlight_path, filename);
     FILE *f = fopen(path, "w");
     if (!f) {
@@ -82,7 +86,7 @@ void write_int(const char *filename, int val) {
     fclose(f);
 }
 
-// 2. Kamera İşlemleri (V4L2)
+// 2. V4L2 Camera Capture
 int capture_luma() {
     int fd = open(CAMERA_DEV, O_RDWR);
     if (fd < 0) {
@@ -95,7 +99,7 @@ int capture_luma() {
     fmt.fmt.pix.width = WIDTH;
     fmt.fmt.pix.height = HEIGHT;
     fmt.fmt.pix.pixelformat = V4L2_PIX_FMT_YUYV;
-
+    
     if (ioctl(fd, VIDIOC_S_FMT, &fmt) == -1) {
         close(fd); return -1;
     }
@@ -121,22 +125,22 @@ int capture_luma() {
     long total_y = 0;
     int pixel_count = 0;
 
-    // Warmup + Capture
+    // Warmup + Capture Loop
     for (int i = 0; i <= WARMUP_FRAMES; i++) {
         ioctl(fd, VIDIOC_QBUF, &buf);
         ioctl(fd, VIDIOC_DQBUF, &buf);
-
+        
         if (i == WARMUP_FRAMES) {
             unsigned char *data = (unsigned char *)buffer_start;
-            // YUYV formatında her 2 byte'da bir Y (parlaklık) verisi vardır.
-            // Hız için 20 pikselde bir örnek alıyoruz (Subsampling)
+            // YUYV format: Every 2nd byte is Y (Luma).
+            // Subsampling: Check every 20th byte for performance.
             for (unsigned int j = 0; j < buf.bytesused; j += 20) {
                 total_y += data[j];
                 pixel_count++;
             }
         }
     }
-
+    
     ioctl(fd, VIDIOC_STREAMOFF, &type);
     munmap(buffer_start, buf.length);
     close(fd);
@@ -163,35 +167,32 @@ int main(int argc, char *argv[]) {
         }
     }
 
-    // Sürücü yolunu bul
     if (!find_backlight_driver()) {
         fprintf(stderr, "Error: No backlight driver found in /sys/class/backlight/\n");
         return 1;
     }
-
+    
     if (verbose) {
         printf("Lumos started.\n");
         printf("Driver: %s\n", backlight_path);
         printf("Interval: %d seconds\n", interval);
     }
 
-    // Ana Döngü
     while (1) {
         int luma = capture_luma();
-
+        
         if (luma >= 0) {
             int max_b = read_int("max_brightness");
             int cur_b = read_int("brightness");
 
             if (max_b > 0) {
-                // Hesaplama
                 double percent = (double)luma / 180.0 * 100.0;
                 if (percent < MIN_BRIGHTNESS_PERCENT) percent = MIN_BRIGHTNESS_PERCENT;
                 if (percent > MAX_BRIGHTNESS_PERCENT) percent = MAX_BRIGHTNESS_PERCENT;
 
                 int target = (int)((percent / 100.0) * max_b);
 
-                // Histerezis (%5 eşik)
+                // Hysteresis: Only update if change > 5%
                 if (abs(cur_b - target) > (max_b * 0.05)) {
                     log_msg("Ambient: %d -> Target: %d", luma, target);
                     write_int("brightness", target);
