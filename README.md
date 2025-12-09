@@ -32,7 +32,7 @@ Lumos comes with an installation script that handles compilation, udev rules, an
 
 1.  **Clone the repository:**
     ```bash
-    git clone [https://github.com/anilaras/lumos.git](https://github.com/anilaras/lumos.git)
+    git clone https://github.com/anilaras/lumos.git
     cd lumos
     ```
 
