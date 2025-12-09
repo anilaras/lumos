@@ -16,7 +16,7 @@ Note: Lumos is designed for laptops and integrated screens managed via ACPI/GPU 
 * **Ultra Lightweight:** The compiled binary is ~20KB and uses negligible RAM/CPU.
 * **Privacy Focused:** Captures data in RAM, calculates the average "Luma" value, and discards the frame immediately. No images are ever saved to disk.
 * **Smart:** Automatically detects your system's backlight controller (`intel_backlight`, `amdgpu_bl0`, etc.).
-* **Systemd Integrated:** Runs silently in the background as a user service.
+* **Systemd Integrated:** Runs silently in the background as a service.
 * **Hardware Optimized:** Requests **YUYV** format directly from the webcam to extract brightness data without expensive color conversion.
 
 ## Requirements
