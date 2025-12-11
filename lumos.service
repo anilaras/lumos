@@ -1,15 +1,12 @@
 [Unit]
 Description=Lumos Auto-Brightness Service
-# Grafik arayüz ve donanım hazır olunca başla
-After=graphical.target systemd-user-sessions.service
+After=systemd-user-sessions.service
 
 [Service]
-# Root olarak çalışacağı için User belirtmeye gerek yok
 Type=simple
 ExecStart=/usr/local/bin/lumos -i 60
 Restart=on-failure
 RestartSec=5
 
 [Install]
-# Sistem servisi olduğu için multi-user.target kullanıyoruz
 WantedBy=multi-user.target

@@ -65,7 +65,7 @@ echo -e "${YELLOW}[4/5] Creating Systemd service...${NC}"
 sudo bash -c "cat > $SERVICE_PATH" <<EOF
 [Unit]
 Description=Lumos Intelligent Auto-Brightness
-After=graphical.target systemd-user-sessions.service
+After=systemd-user-sessions.service
 
 [Service]
 Type=simple
