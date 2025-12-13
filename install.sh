@@ -56,6 +56,15 @@ fi
 sudo cp "$BINARY_NAME" "$INSTALL_PATH"
 sudo chmod +x "$INSTALL_PATH"
 
+# Install Config
+if [ ! -f "/etc/lumos.conf" ]; then
+    echo "Installing default config to /etc/lumos.conf..."
+    sudo cp "lumos.conf" "/etc/lumos.conf"
+    sudo chmod 644 "/etc/lumos.conf"
+else
+    echo "Config file already exists at /etc/lumos.conf. Skipping overwrite."
+fi
+
 echo "Installed to: $INSTALL_PATH"
 
 # 4. SERVICE CONFIGURATION

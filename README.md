@@ -63,36 +63,52 @@ make
 
 ##  Usage & Configuration
 
-Lumos runs automatically in the background. However, you can modify its behavior by editing the systemd service file or running it manually.
+Lumos runs automatically in the background as a systemd service.
 
-**Command Line Arguments:**
+### Configuration File (Recommended)
+
+You can configure Lumos by editing `/etc/lumos.conf`. This file allows you to set brightness limits and the update interval.
+
+```ini
+# /etc/lumos.conf
+
+# Minimum brightness percentage (0-100)
+min_brightness=5
+
+# Maximum brightness percentage (0-100)
+max_brightness=100
+
+# Update interval in seconds
+interval=60
+
+# Brightness Offset (Default: 0)
+# Adds a constant value to the calculated brightness.
+brightness_offset=0
+
+# Brightness Sensitivity (Default: 1.0)
+# Multiplier for the brightness curve.
+# > 1.0 = Brighter, < 1.0 = Dimmer
+sensitivity=1.0
+```
+
+After modifying the config file, restart the service:
+```bash
+sudo systemctl restart lumos
+```
+
+### Command Line Arguments
+
+You can also override settings via command-line arguments:
 
 ```text
 Usage: lumos [OPTIONS]
 
 Options:
-  -i <seconds>   Set the check interval (Default: 60 seconds)
+  -c <path>      Path to config file (default: /etc/lumos.conf)
+  -i <seconds>   Set the check interval (overrides config)
   -v             Verbose mode (Enable logging to stdout)
   -h             Show help message
 ```
-
-**Changing the Check Interval:**
-
-To change how often Lumos checks for light (e.g., every 30 seconds):
-
-1.  Edit the service file:
-    ```bash
-    nano /etc/systemd/system/lumos.service
-    ```
-2.  Modify the `ExecStart` line:
-    ```ini
-    ExecStart=/usr/local/bin/lumos -i 30
-    ```
-3.  Reload and restart:
-    ```bash
-    systemctl daemon-reload
-    systemctl restart lumos
-    ```
 
 ## How It Works
 
@@ -112,6 +128,7 @@ sudo systemctl disable lumos
 
 # Remove files
 rm /etc/systemd/system/lumos.service
+sudo rm /etc/lumos.conf
 sudo rm /usr/local/bin/lumos
 
 # Reload system

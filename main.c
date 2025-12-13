@@ -17,7 +17,7 @@
 #include <getopt.h>
 #include <stdarg.h> 
 
-// Default Settings
+
 #define DEFAULT_INTERVAL 60
 #define CAMERA_DEV "/dev/video0"
 #define MIN_BRIGHTNESS_PERCENT 5
@@ -26,13 +26,69 @@
 #define WIDTH 640
 #define HEIGHT 480
 
-// Global Configuration
-// DÜZELTME: Boyut 256'dan 512'ye çıkarıldı.
 char backlight_path[512] = {0};
-int interval = DEFAULT_INTERVAL;
+
+
+typedef struct {
+    int min_brightness;
+    int max_brightness;
+    int interval;
+    int brightness_offset;
+    float sensitivity;
+} Config;
+
+Config config = {
+    .min_brightness = MIN_BRIGHTNESS_PERCENT,
+    .max_brightness = MAX_BRIGHTNESS_PERCENT,
+    .interval = DEFAULT_INTERVAL,
+    .brightness_offset = 0,
+    .sensitivity = 1.0f
+};
+
 int verbose = 0;
 
-// Helper: Logging
+
+void load_config(const char *config_path) {
+    FILE *f = fopen(config_path, "r");
+    if (!f) {
+        if (verbose) printf("Config file not found: %s (using defaults)\n", config_path);
+        return;
+    }
+
+    char line[256];
+    while (fgets(line, sizeof(line), f)) {
+        if (line[0] == '#' || line[0] == '\n') continue;
+
+        char key[128], val_str[128];
+        if (sscanf(line, "%127[^=]=%127s", key, val_str) == 2) {
+            if (strcmp(key, "min_brightness") == 0) {
+                int val = atoi(val_str);
+                if (val >= 0 && val <= 100) config.min_brightness = val;
+            } else if (strcmp(key, "max_brightness") == 0) {
+                int val = atoi(val_str);
+                if (val >= 0 && val <= 100) config.max_brightness = val;
+            } else if (strcmp(key, "interval") == 0) {
+                int val = atoi(val_str);
+                if (val > 0) config.interval = val;
+            } else if (strcmp(key, "brightness_offset") == 0) {
+                config.brightness_offset = atoi(val_str);
+            } else if (strcmp(key, "sensitivity") == 0) {
+                float val = atof(val_str);
+                if (val > 0.0) config.sensitivity = val;
+            }
+        }
+    }
+    fclose(f);
+    
+    if (config.min_brightness >= config.max_brightness) {
+        config.min_brightness = 5;
+        config.max_brightness = 100;
+        if (verbose) printf("Invalid range in config, reverting to defaults.\n");
+    }
+}
+
+
+
 void log_msg(const char *format, ...) {
     if (!verbose) return;
     va_list args;
@@ -42,7 +98,7 @@ void log_msg(const char *format, ...) {
     printf("\n");
 }
 
-// 1. Driver Auto-Discovery
+
 int find_backlight_driver() {
     DIR *d;
     struct dirent *dir;
@@ -51,7 +107,6 @@ int find_backlight_driver() {
 
     while ((dir = readdir(d)) != NULL) {
         if (dir->d_name[0] == '.') continue;
-        // Take the first available driver
         snprintf(backlight_path, sizeof(backlight_path), "/sys/class/backlight/%s", dir->d_name);
         closedir(d);
         return 1;
@@ -60,9 +115,7 @@ int find_backlight_driver() {
     return 0;
 }
 
-// File I/O Helpers
 int read_int(const char *filename) {
-    // DÜZELTME: Yerel buffer boyutu artırıldı.
     char path[1024];
     snprintf(path, sizeof(path), "%s/%s", backlight_path, filename);
     FILE *f = fopen(path, "r");
@@ -74,7 +127,6 @@ int read_int(const char *filename) {
 }
 
 void write_int(const char *filename, int val) {
-    // DÜZELTME: Yerel buffer boyutu artırıldı.
     char path[1024];
     snprintf(path, sizeof(path), "%s/%s", backlight_path, filename);
     FILE *f = fopen(path, "w");
@@ -86,7 +138,6 @@ void write_int(const char *filename, int val) {
     fclose(f);
 }
 
-// 2. V4L2 Camera Capture
 int capture_luma() {
     int fd = open(CAMERA_DEV, O_RDWR);
     if (fd < 0) {
@@ -125,15 +176,12 @@ int capture_luma() {
     long total_y = 0;
     int pixel_count = 0;
 
-    // Warmup + Capture Loop
     for (int i = 0; i <= WARMUP_FRAMES; i++) {
         ioctl(fd, VIDIOC_QBUF, &buf);
         ioctl(fd, VIDIOC_DQBUF, &buf);
         
         if (i == WARMUP_FRAMES) {
             unsigned char *data = (unsigned char *)buffer_start;
-            // YUYV format: Every 2nd byte is Y (Luma).
-            // Subsampling: Check every 20th byte for performance.
             for (unsigned int j = 0; j < buf.bytesused; j += 20) {
                 total_y += data[j];
                 pixel_count++;
@@ -151,21 +199,37 @@ int capture_luma() {
 void print_usage(char *prog_name) {
     printf("Usage: %s [OPTIONS]\n", prog_name);
     printf("Options:\n");
-    printf("  -i <seconds>   Check interval (default: 60)\n");
+    printf("  -c <path>      Path to config file (default: /etc/lumos.conf)\n");
+    printf("  -i <seconds>   Check interval (overrides config)\n");
     printf("  -v             Verbose mode (print logs)\n");
     printf("  -h             Show this help\n");
 }
 
 int main(int argc, char *argv[]) {
+    char *config_path = "/etc/lumos.conf";
+    int interval_override = -1;
     int opt;
-    while ((opt = getopt(argc, argv, "i:vh")) != -1) {
+
+    for (int i=1; i<argc; i++) {
+        if (strcmp(argv[i], "-c") == 0 && i+1 < argc) {
+            config_path = argv[i+1];
+        }
+    }
+
+    load_config(config_path);
+
+    optind = 1; 
+    while ((opt = getopt(argc, argv, "c:i:vh")) != -1) {
         switch (opt) {
-            case 'i': interval = atoi(optarg); break;
+            case 'c': /* Already handled above */ break;
+            case 'i': interval_override = atoi(optarg); break;
             case 'v': verbose = 1; break;
             case 'h': print_usage(argv[0]); return 0;
             default: print_usage(argv[0]); return 1;
         }
     }
+
+    if (interval_override > 0) config.interval = interval_override;
 
     if (!find_backlight_driver()) {
         fprintf(stderr, "Error: No backlight driver found in /sys/class/backlight/\n");
@@ -175,7 +239,9 @@ int main(int argc, char *argv[]) {
     if (verbose) {
         printf("Lumos started.\n");
         printf("Driver: %s\n", backlight_path);
-        printf("Interval: %d seconds\n", interval);
+        printf("Config: %s\n", config_path);
+        printf("Interval: %d seconds\n", config.interval);
+        printf("Range: %d%% - %d%%\n", config.min_brightness, config.max_brightness);
     }
 
     while (1) {
@@ -186,13 +252,14 @@ int main(int argc, char *argv[]) {
             int cur_b = read_int("brightness");
 
             if (max_b > 0) {
-                double percent = (double)luma / 180.0 * 100.0;
-                if (percent < MIN_BRIGHTNESS_PERCENT) percent = MIN_BRIGHTNESS_PERCENT;
-                if (percent > MAX_BRIGHTNESS_PERCENT) percent = MAX_BRIGHTNESS_PERCENT;
+                double percent = (double)luma / 180.0 * 100.0;                
+                percent *= config.sensitivity;
+                percent += config.brightness_offset;
+                if (percent < config.min_brightness) percent = config.min_brightness;
+                if (percent > config.max_brightness) percent = config.max_brightness;
 
                 int target = (int)((percent / 100.0) * max_b);
 
-                // Hysteresis: Only update if change > 5%
                 if (abs(cur_b - target) > (max_b * 0.05)) {
                     log_msg("Ambient: %d -> Target: %d", luma, target);
                     write_int("brightness", target);
@@ -202,7 +269,7 @@ int main(int argc, char *argv[]) {
             log_msg("Warning: Failed to capture from camera.");
         }
 
-        sleep(interval);
+        sleep(config.interval);
     }
 
     return 0;
