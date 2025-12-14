@@ -16,6 +16,12 @@
 #include <dirent.h>
 #include <getopt.h>
 #include <stdarg.h> 
+#include <sys/socket.h>
+#include <sys/un.h>
+#include <pthread.h>
+#include <sys/stat.h>
+
+#define SOCKET_PATH "/run/lumos.sock"
 
 
 #define DEFAULT_INTERVAL 60
@@ -35,6 +41,8 @@ typedef struct {
     int interval;
     int brightness_offset;
     float sensitivity;
+    int mode; // 0=Auto, 1=Manual
+    int manual_brightness;
 } Config;
 
 Config config = {
@@ -42,10 +50,18 @@ Config config = {
     .max_brightness = MAX_BRIGHTNESS_PERCENT,
     .interval = DEFAULT_INTERVAL,
     .brightness_offset = 0,
-    .sensitivity = 1.0f
+    .sensitivity = 1.0f,
+    .mode = 0,
+    .manual_brightness = 50
 };
 
+// Global config path for persistence
+char *g_config_path = "/etc/lumos.conf";
 int verbose = 0;
+
+// Synchronization for instant updates
+pthread_cond_t wake_cond = PTHREAD_COND_INITIALIZER;
+pthread_mutex_t wake_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 
 void load_config(const char *config_path) {
@@ -75,6 +91,11 @@ void load_config(const char *config_path) {
             } else if (strcmp(key, "sensitivity") == 0) {
                 float val = atof(val_str);
                 if (val > 0.0) config.sensitivity = val;
+            } else if (strcmp(key, "mode") == 0) {
+                if (strcmp(val_str, "manual") == 0 || strcmp(val_str, "1") == 0) config.mode = 1;
+                else config.mode = 0;
+            } else if (strcmp(key, "manual_brightness") == 0) {
+                config.manual_brightness = atoi(val_str);
             }
         }
     }
@@ -88,6 +109,121 @@ void load_config(const char *config_path) {
 }
 
 
+
+void save_config() {
+    FILE *f = fopen(g_config_path, "w");
+    if (!f) {
+        if (verbose) perror("Failed to save config");
+        return;
+    }
+
+    fprintf(f, "# Lumos Configuration File\n\n");
+    fprintf(f, "# Minimum brightness percentage (0-100)\n");
+    fprintf(f, "min_brightness=%d\n\n", config.min_brightness);
+    fprintf(f, "# Maximum brightness percentage (0-100)\n");
+    fprintf(f, "max_brightness=%d\n\n", config.max_brightness);
+    fprintf(f, "# Update interval in seconds\n");
+    fprintf(f, "interval=%d\n\n", config.interval);
+    fprintf(f, "# Brightness Offset (Default: 0)\n");
+    fprintf(f, "brightness_offset=%d\n\n", config.brightness_offset);
+    fprintf(f, "# Brightness Sensitivity (Default: 1.0)\n");
+    fprintf(f, "sensitivity=%.2f\n\n", config.sensitivity);
+    fprintf(f, "# Mode (auto/manual)\n");
+    fprintf(f, "mode=%s\n\n", config.mode ? "manual" : "auto");
+    fprintf(f, "# Manual Brightness Value (0-100)\n");
+    fprintf(f, "manual_brightness=%d\n", config.manual_brightness);
+
+    fclose(f);
+    if (verbose) printf("Configuration saved to %s\n", g_config_path);
+}
+
+void handle_client(int client_fd) {
+    char buffer[256];
+    int n = read(client_fd, buffer, sizeof(buffer) - 1);
+    if (n <= 0) return;
+    buffer[n] = '\0';
+
+    char cmd[32], key[64], val[64];
+    int args = sscanf(buffer, "%31s %63s %63s", cmd, key, val);
+
+    char response[256] = "OK\n";
+
+    if (strcmp(cmd, "GET") == 0 && args >= 2) {
+        if (strcmp(key, "min_brightness") == 0) sprintf(response, "%d\n", config.min_brightness);
+        else if (strcmp(key, "max_brightness") == 0) sprintf(response, "%d\n", config.max_brightness);
+        else if (strcmp(key, "interval") == 0) sprintf(response, "%d\n", config.interval);
+        else if (strcmp(key, "brightness_offset") == 0) sprintf(response, "%d\n", config.brightness_offset);
+        else if (strcmp(key, "sensitivity") == 0) sprintf(response, "%.2f\n", config.sensitivity);
+        else if (strcmp(key, "mode") == 0) sprintf(response, "%s\n", config.mode ? "manual" : "auto");
+        else if (strcmp(key, "manual_brightness") == 0) sprintf(response, "%d\n", config.manual_brightness);
+        else strcpy(response, "ERR Unknown key\n");
+    } 
+    else if (strcmp(cmd, "SET") == 0 && args >= 3) {
+        if (strcmp(key, "min_brightness") == 0) config.min_brightness = atoi(val);
+        else if (strcmp(key, "max_brightness") == 0) config.max_brightness = atoi(val);
+        else if (strcmp(key, "interval") == 0) config.interval = atoi(val);
+        else if (strcmp(key, "brightness_offset") == 0) config.brightness_offset = atoi(val);
+        else if (strcmp(key, "sensitivity") == 0) config.sensitivity = atof(val);
+        else if (strcmp(key, "mode") == 0) {
+             if (strcmp(val, "manual") == 0 || strcmp(val, "1") == 0) config.mode = 1;
+             else config.mode = 0;
+        }
+        else if (strcmp(key, "brightness") == 0 || strcmp(key, "manual_brightness") == 0) {
+            config.manual_brightness = atoi(val);
+            config.mode = 1; // Auto-switch to manual
+        }
+        else strcpy(response, "ERR Unknown key\n");
+        
+        // Signal main thread to update brightness immediately
+        pthread_mutex_lock(&wake_mutex);
+        pthread_cond_signal(&wake_cond);
+        pthread_mutex_unlock(&wake_mutex);
+    } 
+    else if (strcmp(cmd, "PERSIST") == 0) {
+        save_config();
+        strcpy(response, "SAVED\n");
+    } 
+    else {
+        strcpy(response, "ERR Invalid command\n");
+    }
+
+    write(client_fd, response, strlen(response));
+    close(client_fd);
+}
+
+void *socket_thread(void *arg) {
+    int server_fd, client_fd;
+    struct sockaddr_un addr;
+
+    unlink(SOCKET_PATH);
+    if ((server_fd = socket(AF_UNIX, SOCK_STREAM, 0)) == -1) {
+        perror("Socket error");
+        return NULL;
+    }
+
+    memset(&addr, 0, sizeof(addr));
+    addr.sun_family = AF_UNIX;
+    strncpy(addr.sun_path, SOCKET_PATH, sizeof(addr.sun_path)-1);
+
+    if (bind(server_fd, (struct sockaddr*)&addr, sizeof(addr)) == -1) {
+        perror("Bind error");
+        return NULL;
+    }
+
+    // Allow all users to access the socket (so the applet can talk to us)
+    chmod(SOCKET_PATH, 0666);
+
+    if (listen(server_fd, 5) == -1) {
+        perror("Listen error");
+        return NULL;
+    }
+
+    while (1) {
+        client_fd = accept(server_fd, NULL, NULL);
+        if (client_fd == -1) continue;
+        handle_client(client_fd);
+    }
+}
 
 void log_msg(const char *format, ...) {
     if (!verbose) return;
@@ -215,6 +351,7 @@ int main(int argc, char *argv[]) {
             config_path = argv[i+1];
         }
     }
+    g_config_path = config_path; // Store for persistence handling
 
     load_config(config_path);
 
@@ -244,32 +381,58 @@ int main(int argc, char *argv[]) {
         printf("Range: %d%% - %d%%\n", config.min_brightness, config.max_brightness);
     }
 
+    // Start IPC thread
+    pthread_t tid;
+    pthread_create(&tid, NULL, socket_thread, NULL);
+    pthread_detach(tid);
+
     while (1) {
-        int luma = capture_luma();
-        
-        if (luma >= 0) {
+        if (config.mode == 1) {
+            // MANUAL MODE
             int max_b = read_int("max_brightness");
             int cur_b = read_int("brightness");
-
             if (max_b > 0) {
-                double percent = (double)luma / 180.0 * 100.0;                
-                percent *= config.sensitivity;
-                percent += config.brightness_offset;
-                if (percent < config.min_brightness) percent = config.min_brightness;
-                if (percent > config.max_brightness) percent = config.max_brightness;
-
-                int target = (int)((percent / 100.0) * max_b);
-
-                if (abs(cur_b - target) > (max_b * 0.05)) {
-                    log_msg("Ambient: %d -> Target: %d", luma, target);
+                 int target = (int)((config.manual_brightness / 100.0) * max_b);
+                 if (abs(cur_b - target) > (max_b * 0.01)) { // Tighter tolerance for manual
+                    if (verbose) printf("Manual: %d%%\n", config.manual_brightness);
                     write_int("brightness", target);
-                }
+                 }
             }
         } else {
-            log_msg("Warning: Failed to capture from camera.");
+            // AUTO MODE
+            int luma = capture_luma();
+            
+            if (luma >= 0) {
+                int max_b = read_int("max_brightness");
+                int cur_b = read_int("brightness");
+    
+                if (max_b > 0) {
+                    double percent = (double)luma / 180.0 * 100.0;                
+                    percent *= config.sensitivity;
+                    percent += config.brightness_offset;
+                    if (percent < config.min_brightness) percent = config.min_brightness;
+                    if (percent > config.max_brightness) percent = config.max_brightness;
+    
+                    int target = (int)((percent / 100.0) * max_b);
+    
+                    if (abs(cur_b - target) > (max_b * 0.05)) {
+                        log_msg("Ambient: %d -> Target: %d", luma, target);
+                        write_int("brightness", target);
+                    }
+                }
+            } else {
+                log_msg("Warning: Failed to capture from camera.");
+            }
         }
 
-        sleep(config.interval);
+        // Wait for interval OR wake signal
+        struct timespec ts;
+        clock_gettime(CLOCK_REALTIME, &ts);
+        ts.tv_sec += config.interval;
+        
+        pthread_mutex_lock(&wake_mutex);
+        pthread_cond_timedwait(&wake_cond, &wake_mutex, &ts);
+        pthread_mutex_unlock(&wake_mutex);
     }
 
     return 0;

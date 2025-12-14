@@ -1,36 +1,45 @@
 # Lumos
 
-**Lumos** is a lightweight, efficient, and dependency-free auto-brightness daemon for Linux laptops.
+**Lumos** is a lightweight, intelligent auto-brightness daemon for Linux laptops. It adjusts your screen brightness based on ambient light captured from your webcam, without saving any images.
 
-Unlike other solutions that rely on heavy Python libraries (like OpenCV) or GUI tools, Lumos is written in **pure C**. It utilizes the **V4L2 (Video4Linux2)** API to capture ambient light data from your webcam and adjusts your screen brightness via the **Sysfs** interface.
+Now featuring real-time control, a desktop GUI, and a terminal interface (TUI).
 
 ![License](https://img.shields.io/badge/license-MIT-blue.svg)
 ![Platform](https://img.shields.io/badge/platform-Linux-lightgrey.svg)
 ![Language](https://img.shields.io/badge/language-C-orange.svg)
 
-Note: Lumos is designed for laptops and integrated screens managed via ACPI/GPU drivers. It does not support external monitors (HDMI/DP) controlled via DDC/CI.
+---
 
 ## Features
 
-* **Zero Bloat:** No Python, No OpenCV, No GStreamer. Just standard C libraries.
-* **Ultra Lightweight:** The compiled binary is ~20KB and uses negligible RAM/CPU.
-* **Privacy Focused:** Captures data in RAM, calculates the average "Luma" value, and discards the frame immediately. No images are ever saved to disk.
-* **Smart:** Automatically detects your system's backlight controller (`intel_backlight`, `amdgpu_bl0`, etc.).
-* **Systemd Integrated:** Runs silently in the background as a service.
-* **Hardware Optimized:** Requests **YUYV** format directly from the webcam to extract brightness data without expensive color conversion.
+* **Zero Bloat:** Core daemon written in pure C. ~20KB binary.
+* **Real-time & Instant:** Adjustments made in the GUI/TUI apply immediately.
+* **Privacy Focused:** Captures data in RAM, calculates "Luma", and discards the frame. No images saved.
+* **Dual Modes:**
+    * **Auto:** Adjusts brightness based on ambient light.
+    * **Manual:** Set a fixed brightness level when you need it.
+* **Multiple Interfaces:**
+    * **Daemon:** Runs silently in the background.
+    * **GUI:** Qt6-based desktop application for easy configuration.
+    * **TUI:** NCurses-based terminal interface for keyboard control.
+* **Smart:** Automatically detects backlight controllers (`intel_backlight`, `amdgpu_bl0`).
 
 ## Requirements
 
-* A Linux distribution (Fedora, Ubuntu, Arch, etc.)
-* A webcam (default: `/dev/video0`)
-* `gcc` and `make` (for compilation)
-* Backlight control interface at `/sys/class/backlight/`
+* Linux distribution with `systemd` and `udev`.
+* A webcam (default: `/dev/video0`).
+* Backlight control interface at `/sys/class/backlight/`.
+
+**Build Dependencies:**
+* `gcc`, `make`
+* `ncurses-devel` (or `libncurses-dev`) - *Only for TUI*
+* `python3-pyqt6` - *Only for GUI*
 
 ## Installation
 
-### Quick Install (Recommended)
+### Automated Install (Recommended)
 
-Lumos comes with an installation script that handles compilation, udev rules, and service creation.
+The included script handles compilation, dependency checks, and service setup. It will ask if you want to install optional components (GUI/TUI).
 
 1.  **Clone the repository:**
     ```bash
@@ -41,104 +50,79 @@ Lumos comes with an installation script that handles compilation, udev rules, an
 2.  **Run the installer:**
     ```bash
     chmod +x install.sh
-    ./install.sh
+    sudo ./install.sh
     ```
 
-The script will:
-* Compile the source code.
-* Install the binary to `/usr/local/bin/lumos`.
-* Enable and start the systemd user service.
+3.  **Follow the prompts:**
+    *   **Terminal UI (lumos-tui):** Type `y` to install. Requires `ncurses`.
+    *   **Desktop GUI (Lumos Control):** Type `y` to install. Requires `PyQt6`.
 
-### Manual Build
+This will:
+* Compile and install the `lumos` Daemon (Mandatory).
+* Install selected optional components.
+* Enable and start the systemd service.
 
-If you prefer to build it yourself:
+## Usage
 
+### 1. Desktop GUI (Lumos Control)
+
+Launch **Lumos Control** from your application menu or run:
 ```bash
-# Compile
-make
+lumos-gui.py
+```
 
-# Run manually (Testing)
-./lumos -v -i 5
-````
+* **Auto Brightness:** Toggle to enable/disable ambient light detection.
+* **Manual Brightness:** Set a fixed brightness level (disables Auto).
+* **Sensitivity:** Adjust how aggressively the brightness changes in Auto mode.
+* **Offset:** Add a constant value to the calculated brightness.
+* **Save (Persist):** Writes current settings to `/etc/lumos.conf`.
 
-##  Usage & Configuration
+### 2. Terminal UI (TUI)
 
-Lumos runs automatically in the background as a systemd service.
+For keyboard-driven control or SSH sessions:
+```bash
+lumos-tui
+```
 
-### Configuration File (Recommended)
+* **Arrow Keys:** Navigate (Up/Down) and Adjust (Left/Right).
+* **S / Enter:** Save configuration.
+* **Q:** Quit.
 
-You can configure Lumos by editing `/etc/lumos.conf`. This file allows you to set brightness limits and the update interval.
+### 3. Daemon Configuration
+
+Settings are stored in `/etc/lumos.conf`. While the GUI/TUI is recommended, you can edit this file manually:
 
 ```ini
 # /etc/lumos.conf
-
-# Minimum brightness percentage (0-100)
+mode=auto             # or 'manual'
+manual_brightness=50  # 0-100
+interval=60           # Check interval in seconds
+sensitivity=1.0       # Multiplier (>1.0 brighter, <1.0 dimmer)
+brightness_offset=0   # Constant adder
 min_brightness=5
-
-# Maximum brightness percentage (0-100)
 max_brightness=100
-
-# Update interval in seconds
-interval=60
-
-# Brightness Offset (Default: 0)
-# Adds a constant value to the calculated brightness.
-brightness_offset=0
-
-# Brightness Sensitivity (Default: 1.0)
-# Multiplier for the brightness curve.
-# > 1.0 = Brighter, < 1.0 = Dimmer
-sensitivity=1.0
 ```
 
-After modifying the config file, restart the service:
-```bash
-sudo systemctl restart lumos
-```
-
-### Command Line Arguments
-
-You can also override settings via command-line arguments:
-
-```text
-Usage: lumos [OPTIONS]
-
-Options:
-  -c <path>      Path to config file (default: /etc/lumos.conf)
-  -i <seconds>   Set the check interval (overrides config)
-  -v             Verbose mode (Enable logging to stdout)
-  -h             Show help message
-```
-
-## How It Works
-
-1.  **Auto-Discovery:** On startup, Lumos scans `/sys/class/backlight` to find the active display driver.
-2.  **V4L2 Capture:** It connects to the webcam using the Video4Linux2 API. It specifically requests a low-resolution frame in **YUYV** format.
-3.  **Luma Calculation:** Since YUYV format separates brightness (Y) from color (UV), Lumos simply averages the 'Y' bytes. This avoids CPU-intensive RGB-to-Grayscale conversion.
-4.  **Hysteresis:** To prevent screen flickering, the brightness is only updated if the calculated change exceeds a 5% threshold.
+After manual edits, restart the service or send a signal, but using the GUI/TUI is easier as they reload the daemon automatically.
 
 ## Uninstall
 
-To remove Lumos completely from your system:
+To remove Lumos completely:
 
 ```bash
-# Stop the service
 sudo systemctl stop lumos
 sudo systemctl disable lumos
-
-# Remove files
-rm /etc/systemd/system/lumos.service
+sudo rm /etc/systemd/system/lumos.service
+sudo rm /usr/local/bin/lumos /usr/local/bin/lumos-tui /usr/local/bin/lumos-gui.py
+sudo rm /usr/share/applications/lumos-gui.desktop
 sudo rm /etc/lumos.conf
-sudo rm /usr/local/bin/lumos
-
-# Reload system
 sudo systemctl daemon-reload
 ```
 
 ## Contributing
 
-Pull requests are welcome\! For major changes, please open an issue first to discuss what you would like to change.
+Pull requests are welcome!
 
 ## License
 
-This project is licensed under the MIT License - see the LICENSE file for details.
+MIT License. See LICENSE file for details.

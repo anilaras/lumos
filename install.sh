@@ -2,8 +2,13 @@
 
 # --- Configuration & Colors ---
 BINARY_NAME="lumos"
+GUI_NAME="lumos-gui.py"
+TUI_NAME="lumos-tui"
 INSTALL_PATH="/usr/local/bin/$BINARY_NAME"
+GUI_INSTALL_PATH="/usr/local/bin/$GUI_NAME"
+TUI_INSTALL_PATH="/usr/local/bin/$TUI_NAME"
 SERVICE_PATH="/etc/systemd/system/${BINARY_NAME}.service"
+DESKTOP_ENTRY_PATH="/usr/share/applications/lumos-gui.desktop"
 
 GREEN='\033[0;32m'
 RED='\033[0;31m'
@@ -13,6 +18,17 @@ NC='\033[0m' # No Color
 echo -e "${GREEN}### Lumos Installation Wizard ###${NC}"
 echo "Starting system-wide (Root) installation..."
 echo ""
+
+ask_yes_no() {
+    while true; do
+        read -p "$1 [y/N]: " yn
+        case $yn in
+            [Yy]* ) return 0;;
+            [Nn]* | "" ) return 1;;
+            * ) echo "Please answer yes or no.";;
+        esac
+    done
+}
 
 # 1. PREREQUISITE CHECKS
 echo -e "${YELLOW}[1/5] Checking prerequisites...${NC}"
@@ -29,6 +45,41 @@ if ! command -v make &> /dev/null || ! command -v gcc &> /dev/null; then
     echo -e "${RED}Error: 'make' or 'gcc' not found.${NC}"
     echo "Please install build tools first (e.g., sudo dnf install make gcc)."
     exit 1
+fi
+
+# Check for NCurses (for TUI)
+INSTALL_TUI=false
+if ask_yes_no "Do you want to install the Terminal UI (lumos-tui)?"; then
+    INSTALL_TUI=true
+    echo -e "${YELLOW}[1.5/5] Checking build dependencies (NCurses)...${NC}"
+    # Simple check for ncurses header
+    if ! echo "#include <ncurses.h>" | gcc -E -xc - >/dev/null 2>&1; then
+        echo -e "${RED}Error: NCurses headers not found.${NC}"
+        echo "Please install ncurses development libraries:"
+        echo -e "  ${YELLOW}Fedora:${NC} sudo dnf install ncurses-devel"
+        echo -e "  ${YELLOW}Debian/Ubuntu:${NC} sudo apt install libncurses-dev"
+        exit 1
+    fi
+else
+    echo "Skipping TUI installation."
+fi
+
+# Check for PyQt6
+INSTALL_GUI=false
+if ask_yes_no "Do you want to install the Desktop GUI (Lumos Control)?"; then
+    INSTALL_GUI=true
+    echo -e "${YELLOW}[1.6/5] Checking Python dependencies...${NC}"
+    if ! python3 -c "from PyQt6 import QtWidgets" &> /dev/null; then
+        echo -e "${RED}Error: PyQt6 module (QtWidgets) not found.${NC}"
+        echo "Lumos GUI requires PyQt6. Please install it using your package manager or pip:"
+        echo -e "  ${YELLOW}Fedora:${NC} sudo dnf install python3-pyqt6"
+        echo -e "  ${YELLOW}Debian/Ubuntu:${NC} sudo apt install python3-pyqt6"
+        echo -e "  ${YELLOW}Pip:${NC} pip install PyQt6"
+        exit 1
+    fi
+    echo "PyQt6 is installed."
+else
+    echo "Skipping GUI installation."
 fi
 
 echo "System is ready."
@@ -65,7 +116,46 @@ else
     echo "Config file already exists at /etc/lumos.conf. Skipping overwrite."
 fi
 
-echo "Installed to: $INSTALL_PATH"
+echo "Desktop entry created at: $DESKTOP_ENTRY_PATH"
+echo "PyQt6 is installed."
+
+echo "TUI installed to: $TUI_INSTALL_PATH"
+
+# 4.5 TUI INSTALLATION
+if [ "$INSTALL_TUI" = true ]; then
+    echo -e "${YELLOW}[4.5] Installing TUI...${NC}"
+    sudo cp "$TUI_NAME" "$TUI_INSTALL_PATH"
+    sudo chmod +x "$TUI_INSTALL_PATH"
+    echo "TUI installed to: $TUI_INSTALL_PATH"
+fi
+
+# 4.6 GUI INSTALLATION
+    echo -e "${YELLOW}[4.6] Installing GUI...${NC}"
+    sudo cp "$GUI_NAME" "$GUI_INSTALL_PATH"
+    sudo chmod +x "$GUI_INSTALL_PATH"
+    
+    # Generate and install desktop entry dynamically
+    echo "Creating desktop entry..."
+    sudo bash -c "cat > $DESKTOP_ENTRY_PATH" <<EOF
+[Desktop Entry]
+Name=Lumos Control
+Comment=Configure Lumos Auto-Brightness
+Exec=$GUI_INSTALL_PATH
+Icon=brightness-high
+Terminal=false
+Type=Application
+Categories=Settings;HardwareSettings;
+EOF
+    sudo chmod 644 "$DESKTOP_ENTRY_PATH"
+    
+    # Update desktop database cache
+    if command -v update-desktop-database &> /dev/null; then
+        sudo update-desktop-database /usr/share/applications/
+    fi
+    
+    echo "GUI installed to: $GUI_INSTALL_PATH"
+    echo "Desktop entry created at: $DESKTOP_ENTRY_PATH"
+fi
 
 # 4. SERVICE CONFIGURATION
 echo -e "${YELLOW}[4/5] Creating Systemd service...${NC}"
