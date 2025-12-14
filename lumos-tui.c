@@ -15,7 +15,7 @@ typedef struct {
     double min;
     double max;
     double step;
-    int type; // 0=float, 1=int, 2=mode(0=auto/1=manual)
+    int type; // 0=float, 1=int, 2=mode(0=auto/1=manual), 3=webcam(index)
 } Parameter;
 
 Parameter params[] = {
@@ -25,9 +25,10 @@ Parameter params[] = {
     {"brightness_offset", "Offset", 0, -50, 50, 1, 1},
     {"min_brightness", "Min Brightness", 5, 0, 100, 1, 1},
     {"max_brightness", "Max Brightness", 100, 0, 100, 1, 1},
-    {"interval", "Interval (s)", 60, 1, 3600, 1, 1}
+    {"interval", "Interval (s)", 60, 1, 3600, 5, 1},
+    {"camera_dev", "Webcam", 0, 0, 9, 1, 3}
 };
-int param_count = 7;
+int param_count = 8;
 
 // IPC Helper
 void send_cmd(const char *cmd, char *resp, size_t resp_len) {
@@ -67,6 +68,10 @@ void load_values() {
             if (params[i].type == 2) { // Mode
                 if (strstr(resp, "manual")) params[i].value = 1;
                 else params[i].value = 0;
+            } else if (params[i].type == 3) { // Webcam
+                int devId = 0;
+                sscanf(resp, "/dev/video%d", &devId);
+                params[i].value = devId;
             } else {
                 params[i].value = atof(resp);
             }
@@ -78,6 +83,9 @@ void save_value(int idx) {
     char cmd[64];
     if (params[idx].type == 2) {
         snprintf(cmd, sizeof(cmd), "SET %s %d", params[idx].key, (int)params[idx].value);
+    }
+    else if (params[idx].type == 3) {
+        snprintf(cmd, sizeof(cmd), "SET %s /dev/video%d", params[idx].key, (int)params[idx].value);
     }
     else if (params[idx].type == 1) {
         snprintf(cmd, sizeof(cmd), "SET %s %d", params[idx].key, (int)params[idx].value);
@@ -134,6 +142,9 @@ int main() {
             char val_str[36];
             if (params[i].type == 2) {
                 snprintf(val_str, sizeof(val_str), "%s", ((int)params[i].value == 1) ? "MANUAL" : "AUTO");
+            }
+            else if (params[i].type == 3) {
+                snprintf(val_str, sizeof(val_str), "/dev/video%d", (int)params[i].value);
             }
             else if (params[i].type == 1) {
                 snprintf(val_str, sizeof(val_str), "%d", (int)params[i].value);

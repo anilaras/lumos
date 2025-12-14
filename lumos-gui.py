@@ -4,14 +4,16 @@ import socket
 import json
 from PyQt6.QtWidgets import (QApplication, QWidget, QVBoxLayout, QHBoxLayout, 
                              QLabel, QSlider, QPushButton, QMessageBox, QFrame, 
-                             QCheckBox, QSystemTrayIcon, QMenu)
+                             QCheckBox, QSystemTrayIcon, QMenu, QComboBox)
+import glob
+import os
 from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QFont, QIcon, QAction
 
 try:
     from PyQt6.QtWidgets import (QApplication, QWidget, QVBoxLayout, QHBoxLayout, 
                                  QLabel, QSlider, QPushButton, QMessageBox, QFrame, 
-                                 QCheckBox, QSystemTrayIcon, QMenu)
+                                 QCheckBox, QSystemTrayIcon, QMenu, QComboBox)
 except ImportError:
     pass 
 
@@ -21,7 +23,8 @@ class LumosGUI(QWidget):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Lumos Control")
-        self.setFixedWidth(400)
+        #self.setFixedWidth(400)
+        self.resize(400, 600) # remove fixed width to allow webcam combo to expand
         
         # Try setting icon safely
         self.app_icon = QIcon.fromTheme("brightness-high")
@@ -63,6 +66,20 @@ class LumosGUI(QWidget):
         config_label = QLabel("Auto Configuration")
         config_label.setStyleSheet("color: #666; font-weight: bold; margin-top: 10px;")
         layout.addWidget(config_label)
+
+        # Webcam Selector
+        webcam_layout = QHBoxLayout()
+        webcam_lbl = QLabel("Webcam:")
+        self.webcam_combo = QComboBox()
+        self.populate_webcams()
+        self.webcam_combo.currentTextChanged.connect(self.on_webcam_change)
+        webcam_layout.addWidget(webcam_lbl)
+        webcam_layout.addWidget(self.webcam_combo)
+        layout.addLayout(webcam_layout)
+        
+        # Interval
+        self.interval_slider = self.create_slider("Interval (s)", 5, 300, 60, self.on_interval_change)
+        layout.addLayout(self.interval_slider.parent_layout)
         
         self.sensitivity_slider = self.create_slider("Sensitivity", 1, 30, 10, self.on_sensitivity_change, float_scale=10.0)
         layout.addLayout(self.sensitivity_slider.parent_layout)
@@ -208,6 +225,24 @@ class LumosGUI(QWidget):
         display_val = value / slider.float_scale
         slider.val_lbl.setText(f"{display_val:.1f}" if slider.float_scale > 1.0 else str(int(display_val)))
 
+    def populate_webcams(self):
+        self.webcam_combo.blockSignals(True)
+        self.webcam_combo.clear()
+        self.webcam_combo.addItem("/dev/video0") # Always add default
+        
+        devices = sorted(glob.glob("/dev/video*"))
+        for dev in devices:
+            if dev not in ["/dev/video0"]: # Avoid duplicate
+                self.webcam_combo.addItem(dev)
+        
+        self.webcam_combo.blockSignals(False)
+
+    def on_webcam_change(self, text):
+        self.send_cmd(f"SET camera_dev {text}")
+
+    def on_interval_change(self, val):
+        self.send_cmd(f"SET interval {val}")
+
     def send_cmd(self, cmd):
         try:
             client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -282,7 +317,7 @@ class LumosGUI(QWidget):
             self.status_label.setText(f"Save failed: {resp}")
 
     def refresh_config(self):
-        keys = ["mode", "manual_brightness", "min_brightness", "max_brightness", "brightness_offset", "sensitivity"]
+        keys = ["mode", "manual_brightness", "min_brightness", "max_brightness", "brightness_offset", "sensitivity", "interval", "camera_dev"]
         try:
             # Need to get mode first to set checkbox correctly
             mode_resp = self.send_cmd("GET mode")
@@ -308,7 +343,8 @@ class LumosGUI(QWidget):
                 self.manual_slider.blockSignals(False)
 
             # Other config
-            for k in ["min_brightness", "max_brightness", "brightness_offset", "sensitivity"]:
+            # Other config
+            for k in ["min_brightness", "max_brightness", "brightness_offset", "sensitivity", "interval", "camera_dev"]:
                 resp = self.send_cmd(f"GET {k}")
                 if resp and not resp.startswith("ERR"):
                     val = resp
@@ -324,6 +360,17 @@ class LumosGUI(QWidget):
                     elif k == "max_brightness":
                         self.max_slider.setValue(int(val))
                         self.update_label(self.max_slider, int(val))
+                    elif k == "interval":
+                        self.interval_slider.setValue(int(val))
+                        self.update_label(self.interval_slider, int(val))
+                    elif k == "camera_dev":
+                        idx = self.webcam_combo.findText(val.strip())
+                        if idx >= 0:
+                            self.webcam_combo.setCurrentIndex(idx)
+                        else:
+                            # If not found (maybe not plugged in now but in config), add it temporarily?
+                            self.webcam_combo.addItem(val.strip())
+                            self.webcam_combo.setCurrentText(val.strip())
             
             self.status_label.setText("Settings loaded.")
             self.status_label.setStyleSheet("color: blue;")

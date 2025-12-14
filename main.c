@@ -25,7 +25,7 @@
 
 
 #define DEFAULT_INTERVAL 60
-#define CAMERA_DEV "/dev/video0"
+#define DEFAULT_CAMERA_DEV "/dev/video0"
 #define MIN_BRIGHTNESS_PERCENT 5
 #define MAX_BRIGHTNESS_PERCENT 100
 #define WARMUP_FRAMES 5
@@ -43,6 +43,7 @@ typedef struct {
     float sensitivity;
     int mode; // 0=Auto, 1=Manual
     int manual_brightness;
+    char camera_dev[64];
 } Config;
 
 Config config = {
@@ -52,7 +53,8 @@ Config config = {
     .brightness_offset = 0,
     .sensitivity = 1.0f,
     .mode = 0,
-    .manual_brightness = 50
+    .manual_brightness = 50,
+    .camera_dev = DEFAULT_CAMERA_DEV
 };
 
 // Global config path for persistence
@@ -96,6 +98,8 @@ void load_config(const char *config_path) {
                 else config.mode = 0;
             } else if (strcmp(key, "manual_brightness") == 0) {
                 config.manual_brightness = atoi(val_str);
+            } else if (strcmp(key, "camera_dev") == 0) {
+                strncpy(config.camera_dev, val_str, sizeof(config.camera_dev) - 1);
             }
         }
     }
@@ -131,7 +135,9 @@ void save_config() {
     fprintf(f, "# Mode (auto/manual)\n");
     fprintf(f, "mode=%s\n\n", config.mode ? "manual" : "auto");
     fprintf(f, "# Manual Brightness Value (0-100)\n");
-    fprintf(f, "manual_brightness=%d\n", config.manual_brightness);
+    fprintf(f, "manual_brightness=%d\n\n", config.manual_brightness);
+    fprintf(f, "# Camera Device (e.g. /dev/video0)\n");
+    fprintf(f, "camera_dev=%s\n", config.camera_dev);
 
     fclose(f);
     if (verbose) printf("Configuration saved to %s\n", g_config_path);
@@ -156,6 +162,7 @@ void handle_client(int client_fd) {
         else if (strcmp(key, "sensitivity") == 0) sprintf(response, "%.2f\n", config.sensitivity);
         else if (strcmp(key, "mode") == 0) sprintf(response, "%s\n", config.mode ? "manual" : "auto");
         else if (strcmp(key, "manual_brightness") == 0) sprintf(response, "%d\n", config.manual_brightness);
+        else if (strcmp(key, "camera_dev") == 0) sprintf(response, "%s\n", config.camera_dev);
         else strcpy(response, "ERR Unknown key\n");
     } 
     else if (strcmp(cmd, "SET") == 0 && args >= 3) {
@@ -171,6 +178,9 @@ void handle_client(int client_fd) {
         else if (strcmp(key, "brightness") == 0 || strcmp(key, "manual_brightness") == 0) {
             config.manual_brightness = atoi(val);
             config.mode = 1; // Auto-switch to manual
+        }
+        else if (strcmp(key, "camera_dev") == 0) {
+             strncpy(config.camera_dev, val, sizeof(config.camera_dev) - 1);
         }
         else strcpy(response, "ERR Unknown key\n");
         
@@ -275,7 +285,7 @@ void write_int(const char *filename, int val) {
 }
 
 int capture_luma() {
-    int fd = open(CAMERA_DEV, O_RDWR);
+    int fd = open(config.camera_dev, O_RDWR);
     if (fd < 0) {
         if (verbose) perror("Camera open failed");
         return -1;
