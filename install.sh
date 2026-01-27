@@ -130,6 +130,7 @@ if [ "$INSTALL_TUI" = true ]; then
 fi
 
 # 4.6 GUI INSTALLATION
+if [ "$INSTALL_GUI" = true ]; then
     echo -e "${YELLOW}[4.6] Installing GUI...${NC}"
     sudo cp "$GUI_NAME" "$GUI_INSTALL_PATH"
     sudo chmod +x "$GUI_INSTALL_PATH"
