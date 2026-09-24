@@ -13,13 +13,13 @@
 #include <sys/mman.h>
 #include <linux/videodev2.h>
 #include <errno.h>
-#include <dirent.h>
 #include <getopt.h>
 #include <stdarg.h> 
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <pthread.h>
 #include <sys/stat.h>
+#include "brightness.h"
 
 #define SOCKET_PATH "/run/lumos.sock"
 
@@ -32,7 +32,6 @@
 #define WIDTH 640
 #define HEIGHT 480
 
-char backlight_path[512] = {0};
 
 
 typedef struct {
@@ -64,6 +63,7 @@ int verbose = 0;
 // Synchronization for instant updates
 pthread_cond_t wake_cond = PTHREAD_COND_INITIALIZER;
 pthread_mutex_t wake_mutex = PTHREAD_MUTEX_INITIALIZER;
+unsigned long wake_generation = 0;
 
 
 void load_config(const char *config_path) {
@@ -154,6 +154,8 @@ void handle_client(int client_fd) {
 
     char response[256] = "OK\n";
 
+    pthread_mutex_lock(&wake_mutex);
+
     if (strcmp(cmd, "GET") == 0 && args >= 2) {
         if (strcmp(key, "min_brightness") == 0) sprintf(response, "%d\n", config.min_brightness);
         else if (strcmp(key, "max_brightness") == 0) sprintf(response, "%d\n", config.max_brightness);
@@ -185,9 +187,8 @@ void handle_client(int client_fd) {
         else strcpy(response, "ERR Unknown key\n");
         
         // Signal main thread to update brightness immediately
-        pthread_mutex_lock(&wake_mutex);
+        ++wake_generation;
         pthread_cond_signal(&wake_cond);
-        pthread_mutex_unlock(&wake_mutex);
     } 
     else if (strcmp(cmd, "PERSIST") == 0) {
         save_config();
@@ -197,6 +198,7 @@ void handle_client(int client_fd) {
         strcpy(response, "ERR Invalid command\n");
     }
 
+    pthread_mutex_unlock(&wake_mutex);
     write(client_fd, response, strlen(response));
     close(client_fd);
 }
@@ -245,47 +247,8 @@ void log_msg(const char *format, ...) {
 }
 
 
-int find_backlight_driver() {
-    DIR *d;
-    struct dirent *dir;
-    d = opendir("/sys/class/backlight");
-    if (!d) return 0;
-
-    while ((dir = readdir(d)) != NULL) {
-        if (dir->d_name[0] == '.') continue;
-        snprintf(backlight_path, sizeof(backlight_path), "/sys/class/backlight/%s", dir->d_name);
-        closedir(d);
-        return 1;
-    }
-    closedir(d);
-    return 0;
-}
-
-int read_int(const char *filename) {
-    char path[1024];
-    snprintf(path, sizeof(path), "%s/%s", backlight_path, filename);
-    FILE *f = fopen(path, "r");
-    if (!f) return -1;
-    int val;
-    if (fscanf(f, "%d", &val) != 1) val = -1;
-    fclose(f);
-    return val;
-}
-
-void write_int(const char *filename, int val) {
-    char path[1024];
-    snprintf(path, sizeof(path), "%s/%s", backlight_path, filename);
-    FILE *f = fopen(path, "w");
-    if (!f) {
-        if (verbose) perror("Failed to write brightness");
-        return;
-    }
-    fprintf(f, "%d", val);
-    fclose(f);
-}
-
-int capture_luma() {
-    int fd = open(config.camera_dev, O_RDWR);
+int capture_luma(const char *camera_dev) {
+    int fd = open(camera_dev, O_RDWR);
     if (fd < 0) {
         if (verbose) perror("Camera open failed");
         return -1;
@@ -378,14 +341,14 @@ int main(int argc, char *argv[]) {
 
     if (interval_override > 0) config.interval = interval_override;
 
-    if (!find_backlight_driver()) {
-        fprintf(stderr, "Error: No backlight driver found in /sys/class/backlight/\n");
+    if (!brightness_init("/sys/class/backlight", verbose)) {
+        fprintf(stderr, "Error: No usable backlight or DDC/CI brightness output found.\n");
+        fprintf(stderr, "For external monitors, install ddcutil, enable DDC/CI, and check sudo ddcutil detect.\n");
         return 1;
     }
     
     if (verbose) {
         printf("Lumos started.\n");
-        printf("Driver: %s\n", backlight_path);
         printf("Config: %s\n", config_path);
         printf("Interval: %d seconds\n", config.interval);
         printf("Range: %d%% - %d%%\n", config.min_brightness, config.max_brightness);
@@ -397,51 +360,36 @@ int main(int argc, char *argv[]) {
     pthread_detach(tid);
 
     while (1) {
-        if (config.mode == 1) {
-            // MANUAL MODE
-            int max_b = read_int("max_brightness");
-            int cur_b = read_int("brightness");
-            if (max_b > 0) {
-                 int target = (int)((config.manual_brightness / 100.0) * max_b);
-                 if (abs(cur_b - target) > (max_b * 0.01)) { // Tighter tolerance for manual
-                    if (verbose) printf("Manual: %d%%\n", config.manual_brightness);
-                    write_int("brightness", target);
-                 }
-            }
+        pthread_mutex_lock(&wake_mutex);
+        Config current_config = config;
+        unsigned long generation = wake_generation;
+        pthread_mutex_unlock(&wake_mutex);
+
+        if (current_config.mode == 1) {
+            brightness_apply(current_config.manual_brightness, 1.0);
         } else {
-            // AUTO MODE
-            int luma = capture_luma();
-            
+            int luma = capture_luma(current_config.camera_dev);
             if (luma >= 0) {
-                int max_b = read_int("max_brightness");
-                int cur_b = read_int("brightness");
-    
-                if (max_b > 0) {
-                    double percent = (double)luma / 180.0 * 100.0;                
-                    percent *= config.sensitivity;
-                    percent += config.brightness_offset;
-                    if (percent < config.min_brightness) percent = config.min_brightness;
-                    if (percent > config.max_brightness) percent = config.max_brightness;
-    
-                    int target = (int)((percent / 100.0) * max_b);
-    
-                    if (abs(cur_b - target) > (max_b * 0.05)) {
-                        log_msg("Ambient: %d -> Target: %d", luma, target);
-                        write_int("brightness", target);
-                    }
-                }
+                double percent = (double)luma / 180.0 * 100.0;
+                percent *= current_config.sensitivity;
+                percent += current_config.brightness_offset;
+                if (percent < current_config.min_brightness) percent = current_config.min_brightness;
+                if (percent > current_config.max_brightness) percent = current_config.max_brightness;
+                log_msg("Ambient: %d -> Target: %.1f%%", luma, percent);
+                brightness_apply(percent, 5.0);
             } else {
                 log_msg("Warning: Failed to capture from camera.");
             }
         }
 
-        // Wait for interval OR wake signal
         struct timespec ts;
         clock_gettime(CLOCK_REALTIME, &ts);
-        ts.tv_sec += config.interval;
-        
+        ts.tv_sec += current_config.interval > 0 ? current_config.interval : DEFAULT_INTERVAL;
+
         pthread_mutex_lock(&wake_mutex);
-        pthread_cond_timedwait(&wake_cond, &wake_mutex, &ts);
+        // A GUI/TUI change during slow DDC I/O must be applied before sleeping.
+        if (generation == wake_generation)
+            pthread_cond_timedwait(&wake_cond, &wake_mutex, &ts);
         pthread_mutex_unlock(&wake_mutex);
     }
 

@@ -29,14 +29,74 @@ ask_yes_no() {
     done
 }
 
+offer_ddcutil_install() {
+    echo "ddcutil is not installed. It is needed to control external DDC/CI monitors."
+
+    # Host packages on immutable systems need distribution-specific handling.
+    if [ -e /run/ostree-booted ] || command -v rpm-ostree &> /dev/null ||
+       command -v bootc &> /dev/null || command -v steamos-readonly &> /dev/null; then
+        echo "Automatic package installation is skipped on immutable systems."
+        if command -v rpm-ostree &> /dev/null; then
+            echo "If your distribution supports package layering, run: sudo rpm-ostree install ddcutil"
+            echo "Reboot into the updated deployment, then rerun ./install.sh."
+        else
+            echo "Install ddcutil on the host using your distribution's supported method, then rerun ./install.sh."
+        fi
+        return
+    fi
+
+    local install_command=()
+    if command -v apt-get &> /dev/null; then
+        install_command=(apt-get install -y ddcutil)
+    elif command -v dnf &> /dev/null; then
+        install_command=(dnf install -y ddcutil)
+    elif command -v pacman &> /dev/null; then
+        install_command=(pacman -S --needed --noconfirm ddcutil)
+    elif command -v zypper &> /dev/null; then
+        install_command=(zypper --non-interactive install ddcutil)
+    else
+        echo "No supported package manager found. Install ddcutil manually, then rerun ./install.sh."
+        return
+    fi
+
+    echo "Install command: sudo ${install_command[*]}"
+    if ! ask_yes_no "Install ddcutil now for external monitor support?"; then
+        echo "Skipping ddcutil installation."
+        return
+    fi
+
+    if ! sudo "${install_command[@]}"; then
+        echo -e "${YELLOW}Warning: ddcutil installation failed. Install it manually to enable external monitors.${NC}"
+    elif ! command -v ddcutil &> /dev/null; then
+        echo -e "${YELLOW}Warning: ddcutil is still unavailable. Check the package installation and PATH.${NC}"
+    else
+        echo "ddcutil is installed. Enable DDC/CI in your monitor settings."
+    fi
+}
+
 # 1. PREREQUISITE CHECKS
 echo -e "${YELLOW}[1/5] Checking prerequisites...${NC}"
 
-# Check for Backlight support
+if ! command -v ddcutil &> /dev/null; then
+    offer_ddcutil_install
+fi
+
+# A DDC/CI monitor can provide brightness control without a sysfs backlight.
 if [ -z "$(ls -A /sys/class/backlight/ 2>/dev/null)" ]; then
-    echo -e "${RED}Error: No backlight driver found in /sys/class/backlight/.${NC}"
-    echo "Lumos requires a controllable backlight interface (e.g., laptop screen)."
-    exit 1
+    if ! command -v ddcutil &> /dev/null; then
+        echo -e "${RED}Error: No sysfs backlight found and ddcutil is not installed.${NC}"
+        echo "For external monitors, install ddcutil and enable DDC/CI in the monitor settings."
+        exit 1
+    fi
+    echo "Checking for DDC/CI monitors..."
+    if ! DDC_DISPLAYS="$(sudo env LC_ALL=C ddcutil detect --brief)" ||
+       ! grep -q '^Display [0-9]' <<< "$DDC_DISPLAYS"; then
+        echo -e "${RED}Error: No controllable backlight or DDC/CI monitor found.${NC}"
+        echo "Check DDC/CI settings and I2C access with: sudo ddcutil detect"
+        exit 1
+    fi
+elif ! command -v ddcutil &> /dev/null; then
+    echo "Continuing with internal backlight support only."
 fi
 
 # Check for Make and GCC
@@ -86,9 +146,11 @@ echo "System is ready."
 # 2. COMPILATION
 echo -e "${YELLOW}[2/5] Compiling source code...${NC}"
 make clean 2>/dev/null
-make
-
-if [ $? -ne 0 ]; then
+BUILD_TARGETS=("$BINARY_NAME")
+if [ "$INSTALL_TUI" = true ]; then
+    BUILD_TARGETS+=("$TUI_NAME")
+fi
+if ! make "${BUILD_TARGETS[@]}"; then
     echo -e "${RED}Error: Compilation failed.${NC}"
     exit 1
 fi

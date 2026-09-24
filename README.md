@@ -1,6 +1,6 @@
 # Lumos
 
-**Lumos** is a lightweight, intelligent auto-brightness daemon for Linux laptops. It adjusts your screen brightness based on ambient light captured from your webcam, without saving any images.
+**Lumos** is a lightweight, intelligent auto-brightness daemon for Linux laptops and desktops. It adjusts your screen brightness based on ambient light captured from your webcam, without saving any images.
 
 Now featuring real-time control, a desktop GUI, and a terminal interface (TUI).
 
@@ -12,7 +12,7 @@ Now featuring real-time control, a desktop GUI, and a terminal interface (TUI).
 
 ## Features
 
-* **Zero Bloat:** Core daemon written in pure C. ~20KB binary.
+* **Lightweight:** Core daemon written in C, with optional external monitor support through `ddcutil`.
 * **Real-time & Instant:** Adjustments made in the GUI/TUI apply immediately.
 * **Privacy Focused:** Captures data in RAM, calculates "Luma", and discards the frame. No images saved.
 * **Dual Modes:**
@@ -22,13 +22,14 @@ Now featuring real-time control, a desktop GUI, and a terminal interface (TUI).
     * **Daemon:** Runs silently in the background.
     * **GUI:** Qt6-based desktop application for easy configuration.
     * **TUI:** NCurses-based terminal interface for keyboard control.
-* **Smart:** Automatically detects backlight controllers (`intel_backlight`, `amdgpu_bl0`).
+* **Display support:** Automatically detects internal backlights (`intel_backlight`, `amdgpu_bl0`) and external DDC/CI monitors, applying the same brightness percentage to both.
 
 ## Requirements
 
 * Linux distribution with `systemd` and `udev`.
-* A webcam (default: `/dev/video0`).
-* Backlight control interface at `/sys/class/backlight/`.
+* A webcam for automatic brightness (default: `/dev/video0`).
+* A backlight interface at `/sys/class/backlight/`, or an external monitor with DDC/CI brightness support.
+* `ddcutil` for external monitors (optional for internal backlights).
 
 **Build Dependencies:**
 * `gcc`, `make`
@@ -54,6 +55,7 @@ The included script handles compilation, dependency checks, and service setup. I
     ```
 
 3.  **Follow the prompts:**
+    *   **External monitors (ddcutil):** If missing, the installer offers to install it using `apt-get`, `dnf`, `pacman`, or `zypper`. Answer `y` to approve the displayed command. Declining or a failed installation still allows internal-backlight-only setups.
     *   **Terminal UI (lumos-tui):** Type `y` to install. Requires `ncurses`.
     *   **Desktop GUI (Lumos Control):** Type `y` to install. Requires `PyQt6`.
 
@@ -78,6 +80,23 @@ lumos-gui.py
 * **Sensitivity:** Adjust how aggressively the brightness changes in Auto mode.
 * **Offset:** Add a constant value to the calculated brightness.
 * **Save (Persist):** Writes current settings to `/etc/lumos.conf`.
+
+### External monitors (DDC/CI)
+
+The installer can install `ddcutil` after asking for confirmation on supported mutable distributions. On immutable systems (including OSTree/bootc systems and SteamOS), it shows host installation guidance instead of running a mutable-system package manager. You can also install `ddcutil` yourself; see the [ddcutil package documentation](https://www.ddcutil.com/install/). Systems without an internal backlight require `ddcutil` before installation can continue.
+
+Enable DDC/CI in your monitor's on-screen settings, then check detection and brightness support:
+
+```bash
+sudo ddcutil detect --brief
+sudo ddcutil --bus 7 getvcp 10 --terse
+```
+
+Replace `7` with the I2C bus reported for your monitor. If no I2C devices are available, load the driver with `sudo modprobe i2c-dev`; see the [ddcutil setup documentation](https://www.ddcutil.com/config/). The Lumos system service runs as root; a daemon started manually needs write access to the backlight and/or the monitor's I2C device.
+
+Lumos applies the same target percentage to the internal screen and all detected DDC/CI monitors in both automatic and manual modes. It reads each monitor's brightness range before setting VCP feature `10`, so monitors with a maximum other than 100 are scaled correctly. See [ddcutil's brightness value format](https://www.ddcutil.com/command_getvcp/). GUI and TUI controls work for either output type, including systems without an internal backlight. Automatic mode still requires a webcam.
+
+Connected monitors are rescanned during brightness updates, at most once every 30 seconds. Failed or unsupported monitors are skipped independently; slow DDC commands time out after 10 seconds. Use `lumos -v` for DDC diagnostics. Equal percentages do not necessarily produce equal perceived brightness on different panels.
 
 ### 2. Terminal UI (TUI)
 

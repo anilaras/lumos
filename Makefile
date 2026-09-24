@@ -5,12 +5,12 @@ TUI_LDFLAGS = -lncurses
 
 TARGET = lumos
 TUI_TARGET = lumos-tui
-SRC = main.c
+SRC = main.c brightness.c
 TUI_SRC = lumos-tui.c
 
 all: $(TARGET) $(TUI_TARGET)
 
-$(TARGET): $(SRC)
+$(TARGET): $(SRC) brightness.h
 	$(CC) $(CFLAGS) -o $(TARGET) $(SRC) $(LDFLAGS)
 
 $(TUI_TARGET): $(TUI_SRC)
