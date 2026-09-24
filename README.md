@@ -50,7 +50,7 @@ The included script handles compilation, dependency checks, and service setup. I
 2.  **Run the installer:**
     ```bash
     chmod +x install.sh
-    sudo ./install.sh
+    ./install.sh
     ```
 
 3.  **Follow the prompts:**
@@ -61,6 +61,8 @@ This will:
 * Compile and install the `lumos` Daemon (Mandatory).
 * Install selected optional components.
 * Enable and start the systemd service.
+
+Run the installer as your desktop user; it uses `sudo` for system files and the service. The GUI launcher is installed only for that user in `${XDG_DATA_HOME:-$HOME/.local/share}/applications/lumos-gui.desktop`, avoiding writes to `/usr/share/applications` on immutable distributions. Running `sudo ./install.sh` is also supported: the launcher is created as the original user, using their home directory by default. To use a custom `XDG_DATA_HOME`, run `./install.sh` so that `sudo` does not filter that environment variable.
 
 ## Usage
 
@@ -107,17 +109,19 @@ After manual edits, restart the service or send a signal, but using the GUI/TUI 
 
 ## Uninstall
 
-To remove Lumos completely:
+To remove Lumos completely, run these commands as the desktop user who installed it:
 
 ```bash
 sudo systemctl stop lumos
 sudo systemctl disable lumos
 sudo rm /etc/systemd/system/lumos.service
 sudo rm /usr/local/bin/lumos /usr/local/bin/lumos-tui /usr/local/bin/lumos-gui.py
-sudo rm /usr/share/applications/lumos-gui.desktop
+rm -f "${XDG_DATA_HOME:-$HOME/.local/share}/applications/lumos-gui.desktop"
 sudo rm /etc/lumos.conf
 sudo systemctl daemon-reload
 ```
+
+If you installed an older version, its system-wide launcher may still exist at `/usr/share/applications/lumos-gui.desktop`. Remove it with `sudo rm /usr/share/applications/lumos-gui.desktop` if that directory is writable.
 
 ## Contributing
 

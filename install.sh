@@ -8,7 +8,6 @@ INSTALL_PATH="/usr/local/bin/$BINARY_NAME"
 GUI_INSTALL_PATH="/usr/local/bin/$GUI_NAME"
 TUI_INSTALL_PATH="/usr/local/bin/$TUI_NAME"
 SERVICE_PATH="/etc/systemd/system/${BINARY_NAME}.service"
-DESKTOP_ENTRY_PATH="/usr/share/applications/lumos-gui.desktop"
 
 GREEN='\033[0;32m'
 RED='\033[0;31m'
@@ -116,11 +115,6 @@ else
     echo "Config file already exists at /etc/lumos.conf. Skipping overwrite."
 fi
 
-echo "Desktop entry created at: $DESKTOP_ENTRY_PATH"
-echo "PyQt6 is installed."
-
-echo "TUI installed to: $TUI_INSTALL_PATH"
-
 # 4.5 TUI INSTALLATION
 if [ "$INSTALL_TUI" = true ]; then
     echo -e "${YELLOW}[4.5] Installing TUI...${NC}"
@@ -132,12 +126,30 @@ fi
 # 4.6 GUI INSTALLATION
 if [ "$INSTALL_GUI" = true ]; then
     echo -e "${YELLOW}[4.6] Installing GUI...${NC}"
-    sudo cp "$GUI_NAME" "$GUI_INSTALL_PATH"
-    sudo chmod +x "$GUI_INSTALL_PATH"
+    sudo cp "$GUI_NAME" "$GUI_INSTALL_PATH" || exit 1
+    sudo chmod +x "$GUI_INSTALL_PATH" || exit 1
+
+    # Keep the launcher in the invoking user's writable data directory,
+    # including when the installer was started with sudo.
+    DESKTOP_RUN=()
+    DESKTOP_HOME="$HOME"
+    if [ "$(id -u)" -eq 0 ] && [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != root ]; then
+        DESKTOP_RUN=(sudo -u "$SUDO_USER" -H)
+        DESKTOP_HOME="$("${DESKTOP_RUN[@]}" sh -c 'printf "%s" "$HOME"')" || exit 1
+    fi
+
+    # XDG paths must be absolute; ignore empty or relative values.
+    case "${XDG_DATA_HOME:-}" in
+        /*) DESKTOP_DATA_HOME="$XDG_DATA_HOME" ;;
+        *) DESKTOP_DATA_HOME="$DESKTOP_HOME/.local/share" ;;
+    esac
+    DESKTOP_ENTRY_DIR="$DESKTOP_DATA_HOME/applications"
+    DESKTOP_ENTRY_PATH="$DESKTOP_ENTRY_DIR/lumos-gui.desktop"
     
     # Generate and install desktop entry dynamically
     echo "Creating desktop entry..."
-    sudo bash -c "cat > $DESKTOP_ENTRY_PATH" <<EOF
+    "${DESKTOP_RUN[@]}" mkdir -p -- "$DESKTOP_ENTRY_DIR" || exit 1
+    "${DESKTOP_RUN[@]}" tee "$DESKTOP_ENTRY_PATH" > /dev/null <<EOF || exit 1
 [Desktop Entry]
 Name=Lumos Control
 Comment=Configure Lumos Auto-Brightness
@@ -147,11 +159,11 @@ Terminal=false
 Type=Application
 Categories=Settings;HardwareSettings;
 EOF
-    sudo chmod 644 "$DESKTOP_ENTRY_PATH"
+    "${DESKTOP_RUN[@]}" chmod 644 "$DESKTOP_ENTRY_PATH" || exit 1
     
     # Update desktop database cache
     if command -v update-desktop-database &> /dev/null; then
-        sudo update-desktop-database /usr/share/applications/
+        "${DESKTOP_RUN[@]}" update-desktop-database "$DESKTOP_ENTRY_DIR"
     fi
     
     echo "GUI installed to: $GUI_INSTALL_PATH"
